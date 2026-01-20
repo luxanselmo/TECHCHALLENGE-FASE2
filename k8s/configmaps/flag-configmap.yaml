@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flag-config
+  namespace: flag
+data:
+  APP_PORT: "8002"
+  AUTH_SERVICE_URL: "http://auth-service:8001"
+  MASTER_KEY: "bWluaGEtY2hhdmUtdWx0cmEtc2VjcmV0YS0yMDI2"

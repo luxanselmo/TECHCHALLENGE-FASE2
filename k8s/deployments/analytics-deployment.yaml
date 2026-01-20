@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: analytics
+  labels:
+    app: analytics-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: analytics-service
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      # IRSA — ServiceAccount com IAM Role dedicado
+      serviceAccountName: analytics-service
+
+      containers:
+        - name: analytics-service
+          image: 817878529306.dkr.ecr.us-east-1.amazonaws.com/togglemaster/analytics-service:v1
+          imagePullPolicy: Always
+
+          ports:
+            - containerPort: 8005
+
+          envFrom:
+            - configMapRef:
+                name: analytics-config
+            - secretRef:
+                name: analytics-secrets
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          readinessProbe:
+            tcpSocket:
+              port: 8005
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+
+          livenessProbe:
+            tcpSocket:
+              port: 8005
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 1
+            failureThreshold: 3

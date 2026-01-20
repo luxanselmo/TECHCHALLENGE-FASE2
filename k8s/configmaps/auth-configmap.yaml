@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-config
+  namespace: auth
+data:
+  APP_PORT: "8001"
+  LOG_LEVEL: "INFO"
+  MASTER_KEY: "bWluaGEtY2hhdmUtdWx0cmEtc2VjcmV0YS0yMDI2"

@@ -1,0 +1,213 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------
+  # INFRAESTRUTURA DE DADOS
+  # ----------------------------------------------------------------
+
+  postgres-auth:
+    image: postgres:14-alpine
+    container_name: postgres-auth
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+      - ./auth-service/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d auth_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-shared:
+    image: postgres:14-alpine
+    container_name: postgres-shared
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=flag_db 
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_shared_data:/var/lib/postgresql/data
+      - ./flag-service/db/init.sql:/docker-entrypoint-initdb.d/1-flag.sql
+      - ./targeting-service/db/init.sql:/docker-entrypoint-initdb.d/2-targeting.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d flag_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb_data:/data
+    user: root
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sqs-local:
+    image: softwaremill/elasticmq-native
+    container_name: sqs-local
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9324 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------
+  # MICROSSERVIÇOS
+  # ----------------------------------------------------------------
+
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@postgres-auth:5432/auth_db
+      - PORT=8001
+      - MASTER_KEY=admin-secreto-123
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro 
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+
+  flag-service:
+    build: ./flag-service
+    container_name: flag-service
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@postgres-shared:5432/flag_db
+      - PORT=8002
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro 
+    depends_on:
+      postgres-shared:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  targeting-service:
+    build: ./targeting-service
+    container_name: targeting-service
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@postgres-shared:5432/flag_db
+      - PORT=8003
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro  
+    depends_on:
+      postgres-shared:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  evaluation-service:
+    build: ./evaluation-service
+    container_name: evaluation-service
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - REDIS_URL=redis://redis:6379
+      - FLAG_SERVICE_URL=http://flag-service:8002
+      - TARGETING_SERVICE_URL=http://targeting-service:8003
+      - SERVICE_API_KEY=tm_key_d2d39af0aa43dbe6ef877704e74f51023993ffed973e9357c6ed02e5a4d4c332
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_SESSION_TOKEN=""
+      - AWS_SECURITY_TOKEN=""
+      - AWS_SQS_URL=http://sqs-local:9324/000000000000/analytics-queue
+      - AWS_ENDPOINT_URL=http://sqs-local:9324
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro  
+    depends_on:
+      redis:
+        condition: service_started # Relaxado para evitar travamento
+      sqs-local:
+        condition: service_started # Relaxado para evitar travamento
+
+  analytics-service:
+    build: ./analytics-service
+    container_name: analytics-service
+    ports:
+      - "8005:8005"
+    environment:
+      - PORT=8005
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_SESSION_TOKEN=
+      - AWS_DYNAMODB_TABLE=ToggleMasterAnalytics
+      - AWS_DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - AWS_SQS_URL=http://sqs-local:9324/000000000000/analytics-queue
+      - AWS_SQS_ENDPOINT=http://sqs-local:9324
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro 
+    depends_on:
+      dynamodb-local:
+        condition: service_started # Relaxado para evitar travamento
+      sqs-local:
+        condition: service_started # Relaxado para evitar travamento
+
+  dynamodb-gui:
+    image: aaronshaf/dynamodb-admin
+    container_name: dynamodb-gui
+    ports:
+      - "8008:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://dynamodb-local:8000
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+    depends_on:
+      - dynamodb-local      
+
+volumes:
+  postgres_auth_data:
+  postgres_shared_data:
+  dynamodb_data:

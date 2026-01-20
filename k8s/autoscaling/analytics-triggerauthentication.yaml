@@ -1,0 +1,8 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: analytics-aws-auth
+  namespace: analytics
+spec:
+  podIdentity:
+    provider: aws-eks
